@@ -68,204 +68,225 @@ function insertEmptyLineAtEnd() {
 
 function getCurrentBlock(moveDown: boolean = true): string {
   const editor = vscode.window.activeTextEditor;
-  if (!editor) {
-    return "";
-  }
+  if (!editor) return "";
 
   const document = editor.document;
   const selection = editor.selection;
 
   // If there's an active selection, just return that
-  if (!selection.isEmpty) {
-    return document.getText(selection);
-  }
+  if (!selection.isEmpty) return document.getText(selection);
 
   const cursorPosition = selection.active;
-  
-  // Validate cursor position is within document bounds
-  if (cursorPosition.line >= document.lineCount || cursorPosition.line < 0) {
-    return "";
-  }
+  if (cursorPosition.line >= document.lineCount || cursorPosition.line < 0) return "";
 
   const currentLine = document.lineAt(cursorPosition.line);
-  
-  // Check if we're inside a multiline string
+  const lineText = currentLine.text;
+
+  // --------- 1. Multiline string check ---------
   const multilineStringInfo = isInsideMultilineString(document, cursorPosition);
   if (multilineStringInfo) {
     return handleMultilineString(document, multilineStringInfo, moveDown);
   }
 
-  // Original logic for non-string blocks
+  // --------- 2. Multi-line dict/list/tuple/set (bracket blocks) ---------
+  // This block finds the full bracketed block, including assignments
+  const openers = ["{", "[", "("];
+  const closers = ["}", "]", ")"];
+  const openerToCloser: { [key: string]: string } = { "{": "}", "[": "]", "(": ")" };
+  function lineHasUnmatchedOpener(text: string): string | null {
+    for (let i = 0; i < openers.length; i++) {
+      const o = openers[i];
+      // Only trigger if opener appears and is not immediately matched on same line
+      if (text.includes(o)) {
+        let before = text.slice(0, text.indexOf(o));
+        // Skip if inside a string literal (simple check)
+        if ((before.split('"').length - 1) % 2 === 1 || (before.split("'").length - 1) % 2 === 1) continue;
+        // Now check if balanced on this line already
+        let openCount = (text.match(new RegExp(`\\${o}`, "g")) || []).length;
+        let closeCount = (text.match(new RegExp(`\\${closers[i]}`, "g")) || []).length;
+        if (openCount > closeCount) return o;
+      }
+    }
+    return null;
+  }
+  const opener = lineHasUnmatchedOpener(lineText);
+  if (opener) {
+    const closer = openerToCloser[opener];
+    let blockStart = cursorPosition.line;
+    let blockEnd = cursorPosition.line;
+    let balance = 0;
+
+    for (let line = cursorPosition.line; line < document.lineCount; line++) {
+      const text = document.lineAt(line).text;
+      balance += (text.match(new RegExp(`\\${opener}`, "g")) || []).length;
+      balance -= (text.match(new RegExp(`\\${closer}`, "g")) || []).length;
+      blockEnd = line;
+      if (balance === 0) break;
+    }
+
+    let blockText = "";
+    for (let line = blockStart; line <= blockEnd; line++) {
+      blockText += document.lineAt(line).text + "\n";
+    }
+    if (moveDown) moveToLineStart(blockEnd + 1);
+    return blockText.trimEnd();
+  }
+
+  // --------- 3. Function/Class (with decorators) ---------
   const indentLength = currentLine.firstNonWhitespaceCharacterIndex;
-  const indent = currentLine.text.slice(0, indentLength);
-  const pattern = new RegExp(`^${indent}(\\s|else|elif|except|finally|\\)|\\]|\\})`);
-  const decoratorPattern = new RegExp(`^${indent}@`);
-  const empty = new RegExp(`^\\s*#|^\\s*$`);
+  const indent = lineText.slice(0, indentLength);
   const functionPattern = new RegExp(`^${indent}def\\s`);
   const classPattern = new RegExp(`^${indent}class\\s`);
-  
-  let blockText = currentLine.text;
-  let lineNumber;
+  const decoratorPattern = new RegExp(`^${indent}@`);
+  const empty = /^\s*#|^\s*$/;
 
-  if (functionPattern.test(currentLine.text) || classPattern.test(currentLine.text)) {
-    for (lineNumber = cursorPosition.line - 1; lineNumber >= 0; lineNumber--) {
-      const line = document.lineAt(lineNumber);
-      if (decoratorPattern.test(line.text)) {
-        blockText = `${line.text}\n${blockText}`;
-        continue;
-      } else if (empty.test(line.text)) {
+  if (functionPattern.test(lineText) || classPattern.test(lineText)) {
+    let blockStart = cursorPosition.line;
+    let blockEnd = cursorPosition.line;
+
+    // Go upwards: include decorators, skip empty lines/comments
+    for (let line = cursorPosition.line - 1; line >= 0; line--) {
+      const prevText = document.lineAt(line).text;
+      if (decoratorPattern.test(prevText)) {
+        blockStart = line;
+      } else if (empty.test(prevText)) {
         continue;
       } else {
         break;
       }
     }
-  }
 
-  let lastLineIsDecorator = decoratorPattern.test(currentLine.text);
-  for (lineNumber = cursorPosition.line + 1; lineNumber < document.lineCount; lineNumber++) {
-    try {
-      const line = document.lineAt(lineNumber);
-      if (empty.test(line.text)) {
-        continue;
-      }
-      if (lastLineIsDecorator) {
-        if (!decoratorPattern.test(line.text)) {
-          lastLineIsDecorator = false;
-        }
-        blockText += `\n${line.text}`;
-        continue;
-      }
-      if (pattern.test(line.text)) {
-        blockText += `\n${line.text}`;
+    // Go downwards: include indented lines (body)
+    const blockIndent = indentLength;
+    for (let line = cursorPosition.line + 1; line < document.lineCount; line++) {
+      const nextText = document.lineAt(line).text;
+      if (empty.test(nextText)) continue; // skip empty/comment lines
+      const nextIndent = document.lineAt(line).firstNonWhitespaceCharacterIndex;
+      if (nextIndent > blockIndent) {
+        blockEnd = line;
       } else {
         break;
       }
-    } catch (error) {
-      console.error(`Error accessing line ${lineNumber}:`, error);
-      break;
     }
+
+    let blockText = "";
+    for (let line = blockStart; line <= blockEnd; line++) {
+      blockText += document.lineAt(line).text + "\n";
+    }
+    if (moveDown) moveToLineStart(blockEnd + 1);
+    return blockText.trimEnd();
   }
 
-  if (moveDown) {
-    try {
-      if (lineNumber >= document.lineCount) {
-        const lastLine = document.lineAt(document.lineCount - 1);
-        if (!empty.test(lastLine.text)) {
-          insertEmptyLineAtEnd();
-        }
-        lineNumber = document.lineCount - 1;
+  // --------- 4. Decorator block ---------
+  if (decoratorPattern.test(lineText)) {
+    let blockStart = cursorPosition.line;
+    let blockEnd = cursorPosition.line;
+
+    for (let line = cursorPosition.line - 1; line >= 0; line--) {
+      const prevText = document.lineAt(line).text;
+      if (decoratorPattern.test(prevText)) {
+        blockStart = line;
+      } else if (empty.test(prevText)) {
+        continue;
+      } else {
+        break;
       }
-      moveToLineStart(lineNumber);
-    } catch (error) {
-      console.error("Error moving cursor:", error);
     }
+    for (let line = cursorPosition.line + 1; line < document.lineCount; line++) {
+      const nextText = document.lineAt(line).text;
+      if (decoratorPattern.test(nextText)) {
+        blockEnd = line;
+      } else if (empty.test(nextText)) {
+        continue;
+      } else {
+        break;
+      }
+    }
+    let blockText = "";
+    for (let line = blockStart; line <= blockEnd; line++) {
+      blockText += document.lineAt(line).text + "\n";
+    }
+    if (moveDown) moveToLineStart(blockEnd + 1);
+    return blockText.trimEnd();
   }
 
-  return blockText;
+  // --------- 5. Single non-empty line ---------
+  if (lineText.trim().length > 0) {
+    if (moveDown) moveToLineStart(cursorPosition.line + 1);
+    return lineText;
+  }
+
+  // --------- 6. Blank or comment ---------
+  return "";
 }
-function isInsideMultilineString(document: vscode.TextDocument, position: vscode.Position): 
-  { startLine: number, endLine: number, quoteType: string } | null {
-    // Validate position is within document bounds
-  if (position.line >= document.lineCount || position.line < 0) {
-    return null;
-  }
 
+
+
+function isInsideMultilineString(
+  document: vscode.TextDocument,
+  position: vscode.Position
+): { startLine: number; endLine: number; quoteType: string } | null {
   const tripleQuotes = ['"""', "'''"];
-  let startLine: number | null = null;
-  let endLine: number | null = null;
-  let quoteType: string | null = null;
-  
-  try {
-    const tripleQuotes = ['"""', "'''"];
-    let startLine: number | null = null;
-    let endLine: number | null = null;
-    let quoteType: string | null = null;
-    
-    // Check current line first
-    const currentLineText = document.lineAt(position.line).text;
+  let inside = false;
+  let quoteType = "";
+  let startLine = -1;
+
+  for (let line = 0; line <= position.line; line++) {
+    const text = document.lineAt(line).text;
     for (const q of tripleQuotes) {
-      const firstQuoteIndex = currentLineText.indexOf(q);
-      if (firstQuoteIndex >= 0 && firstQuoteIndex < position.character) {
-        const remainingText = currentLineText.substring(firstQuoteIndex + q.length);
-        if (remainingText.includes(q)) {
-          // Single line triple quote - not a multiline string
-          return null;
-        } else {
-          startLine = position.line;
+      let idx = text.indexOf(q);
+      while (idx !== -1) {
+        if (!inside) {
+          inside = true;
           quoteType = q;
-          break;
+          startLine = line;
+        } else if (q === quoteType) {
+          inside = false;
         }
+        idx = text.indexOf(q, idx + q.length);
       }
     }
-    
-    // If not found on current line, search backwards
-    if (startLine === null) {
-      for (let line = position.line; line >= 0; line--) {
-        const lineText = document.lineAt(line).text;
-        for (const q of tripleQuotes) {
-          if (lineText.includes(q)) {
-            // Check if it's an opening quote (odd number of quotes before it)
-            const quotesBefore = (lineText.match(new RegExp(q, 'g')) || []).length;
-            if (quotesBefore % 2 === 1) {
-              startLine = line;
-              quoteType = q;
-              break;
-            }
-          }
-        }
-        if (quoteType !== null) break;
-      }
-    }
-    
-    if (quoteType === null || startLine === null) return null;
-    
-    // Find the closing quote
-    for (let line = startLine; line < document.lineCount; line++) {
-      const lineText = document.lineAt(line).text;
-      if (line > startLine && lineText.includes(quoteType)) {
-        endLine = line;
-        break;
-      }
-    }
-    
-    if (endLine === null) return null;
-    
-    return { startLine, endLine, quoteType };
-    } catch (error) {
-    console.error("Error in isInsideMultilineString:", error);
-    return null;
   }
+
+  if (inside && startLine >= 0) {
+    // Find the closing triple quote
+    for (let line = position.line + 1; line < document.lineCount; line++) {
+      const text = document.lineAt(line).text;
+      if (text.includes(quoteType)) {
+        return { startLine, endLine: line, quoteType };
+      }
+    }
+    // Unterminated: treat rest of doc as inside string
+    return { startLine, endLine: document.lineCount - 1, quoteType };
+  }
+  return null;
 }
+
+
 
 function handleMultilineString(
-  document: vscode.TextDocument, 
-  info: { startLine: number, endLine: number, quoteType: string },
+  document: vscode.TextDocument,
+  info: { startLine: number; endLine: number; quoteType: string },
   moveDown: boolean
 ): string {
   let blockText = '';
-  
-  try {
-    for (let line = info.startLine; line <= info.endLine; line++) {
-      if (line >= 0 && line < document.lineCount) {
-        blockText += document.lineAt(line).text + '\n';
-      }
+  for (let line = info.startLine; line <= info.endLine; line++) {
+    if (line >= 0 && line < document.lineCount) {
+      blockText += document.lineAt(line).text + '\n';
     }
-    
-    if (moveDown) {
-      const nextLine = info.endLine + 1;
-      if (nextLine < document.lineCount) {
-        moveToLineStart(nextLine);
-      } else {
-        insertEmptyLineAtEnd();
-        moveToLineStart(nextLine);
-      }
-    }
-  } catch (error) {
-    console.error("Error in handleMultilineString:", error);
   }
-  
+  if (moveDown) {
+    const nextLine = info.endLine + 1;
+    if (nextLine < document.lineCount) {
+      moveToLineStart(nextLine);
+    } else {
+      insertEmptyLineAtEnd();
+      moveToLineStart(nextLine);
+    }
+  }
   return blockText.trim();
 }
+
 
 function sendToJupyter(code: string) {
   vscode.commands.executeCommand("jupyter.execSelectionInteractive", code);
