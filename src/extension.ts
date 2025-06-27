@@ -73,7 +73,6 @@ function getCurrentBlock(moveDown: boolean = true): string {
   const document = editor.document;
   const selection = editor.selection;
 
-  // If there's an active selection, just return that
   if (!selection.isEmpty) return document.getText(selection);
 
   const cursorPosition = selection.active;
@@ -82,26 +81,22 @@ function getCurrentBlock(moveDown: boolean = true): string {
   const currentLine = document.lineAt(cursorPosition.line);
   const lineText = currentLine.text;
 
-  // --------- 1. Multiline string check ---------
+  // ----- 1. Multiline string detection -----
   const multilineStringInfo = isInsideMultilineString(document, cursorPosition);
   if (multilineStringInfo) {
     return handleMultilineString(document, multilineStringInfo, moveDown);
   }
 
-  // --------- 2. Multi-line dict/list/tuple/set (bracket blocks) ---------
-  // This block finds the full bracketed block, including assignments
+  // ----- 2. Multi-line dict/list/tuple/set (bracket blocks) -----
   const openers = ["{", "[", "("];
   const closers = ["}", "]", ")"];
   const openerToCloser: { [key: string]: string } = { "{": "}", "[": "]", "(": ")" };
   function lineHasUnmatchedOpener(text: string): string | null {
     for (let i = 0; i < openers.length; i++) {
       const o = openers[i];
-      // Only trigger if opener appears and is not immediately matched on same line
       if (text.includes(o)) {
         let before = text.slice(0, text.indexOf(o));
-        // Skip if inside a string literal (simple check)
         if ((before.split('"').length - 1) % 2 === 1 || (before.split("'").length - 1) % 2 === 1) continue;
-        // Now check if balanced on this line already
         let openCount = (text.match(new RegExp(`\\${o}`, "g")) || []).length;
         let closeCount = (text.match(new RegExp(`\\${closers[i]}`, "g")) || []).length;
         if (openCount > closeCount) return o;
@@ -115,7 +110,6 @@ function getCurrentBlock(moveDown: boolean = true): string {
     let blockStart = cursorPosition.line;
     let blockEnd = cursorPosition.line;
     let balance = 0;
-
     for (let line = cursorPosition.line; line < document.lineCount; line++) {
       const text = document.lineAt(line).text;
       balance += (text.match(new RegExp(`\\${opener}`, "g")) || []).length;
@@ -123,7 +117,6 @@ function getCurrentBlock(moveDown: boolean = true): string {
       blockEnd = line;
       if (balance === 0) break;
     }
-
     let blockText = "";
     for (let line = blockStart; line <= blockEnd; line++) {
       blockText += document.lineAt(line).text + "\n";
@@ -132,37 +125,31 @@ function getCurrentBlock(moveDown: boolean = true): string {
     return blockText.trimEnd();
   }
 
-  // --------- 3. Function/Class (with decorators) ---------
+  // ----- 3. Compound statement blocks: for, while, if, elif, else, try, except, finally, with -----
+  // Matches the header and all indented lines after
+  const headerKeywords = [
+    "for", "while", "if", "elif", "else", "try", "except", "finally", "with"
+  ];
+  function lineIsHeader(text: string, indent: string): boolean {
+    for (const kw of headerKeywords) {
+      const regex = new RegExp(`^${indent}${kw}\\b.*:\\s*(#.*)?$`);
+      if (regex.test(text)) return true;
+    }
+    return false;
+  }
   const indentLength = currentLine.firstNonWhitespaceCharacterIndex;
   const indent = lineText.slice(0, indentLength);
-  const functionPattern = new RegExp(`^${indent}def\\s`);
-  const classPattern = new RegExp(`^${indent}class\\s`);
-  const decoratorPattern = new RegExp(`^${indent}@`);
-  const empty = /^\s*#|^\s*$/;
 
-  if (functionPattern.test(lineText) || classPattern.test(lineText)) {
+  if (lineIsHeader(lineText, indent)) {
     let blockStart = cursorPosition.line;
     let blockEnd = cursorPosition.line;
 
-    // Go upwards: include decorators, skip empty lines/comments
-    for (let line = cursorPosition.line - 1; line >= 0; line--) {
-      const prevText = document.lineAt(line).text;
-      if (decoratorPattern.test(prevText)) {
-        blockStart = line;
-      } else if (empty.test(prevText)) {
-        continue;
-      } else {
-        break;
-      }
-    }
-
-    // Go downwards: include indented lines (body)
-    const blockIndent = indentLength;
+    // Go downwards: include all indented lines, skip blank/comment
     for (let line = cursorPosition.line + 1; line < document.lineCount; line++) {
       const nextText = document.lineAt(line).text;
-      if (empty.test(nextText)) continue; // skip empty/comment lines
+      if (/^\s*#|^\s*$/.test(nextText)) continue; // skip comments/blank
       const nextIndent = document.lineAt(line).firstNonWhitespaceCharacterIndex;
-      if (nextIndent > blockIndent) {
+      if (nextIndent > indentLength) {
         blockEnd = line;
       } else {
         break;
@@ -177,11 +164,48 @@ function getCurrentBlock(moveDown: boolean = true): string {
     return blockText.trimEnd();
   }
 
-  // --------- 4. Decorator block ---------
+  // ----- 4. Function/Class (with decorators) -----
+  const functionPattern = new RegExp(`^${indent}def\\s`);
+  const classPattern = new RegExp(`^${indent}class\\s`);
+  const decoratorPattern = new RegExp(`^${indent}@`);
+  const empty = /^\s*#|^\s*$/;
+
+  if (functionPattern.test(lineText) || classPattern.test(lineText)) {
+    let blockStart = cursorPosition.line;
+    let blockEnd = cursorPosition.line;
+    for (let line = cursorPosition.line - 1; line >= 0; line--) {
+      const prevText = document.lineAt(line).text;
+      if (decoratorPattern.test(prevText)) {
+        blockStart = line;
+      } else if (empty.test(prevText)) {
+        continue;
+      } else {
+        break;
+      }
+    }
+    const blockIndent = indentLength;
+    for (let line = cursorPosition.line + 1; line < document.lineCount; line++) {
+      const nextText = document.lineAt(line).text;
+      if (empty.test(nextText)) continue;
+      const nextIndent = document.lineAt(line).firstNonWhitespaceCharacterIndex;
+      if (nextIndent > blockIndent) {
+        blockEnd = line;
+      } else {
+        break;
+      }
+    }
+    let blockText = "";
+    for (let line = blockStart; line <= blockEnd; line++) {
+      blockText += document.lineAt(line).text + "\n";
+    }
+    if (moveDown) moveToLineStart(blockEnd + 1);
+    return blockText.trimEnd();
+  }
+
+  // ----- 5. Decorator block -----
   if (decoratorPattern.test(lineText)) {
     let blockStart = cursorPosition.line;
     let blockEnd = cursorPosition.line;
-
     for (let line = cursorPosition.line - 1; line >= 0; line--) {
       const prevText = document.lineAt(line).text;
       if (decoratorPattern.test(prevText)) {
@@ -210,15 +234,16 @@ function getCurrentBlock(moveDown: boolean = true): string {
     return blockText.trimEnd();
   }
 
-  // --------- 5. Single non-empty line ---------
+  // ----- 6. Single non-empty line -----
   if (lineText.trim().length > 0) {
     if (moveDown) moveToLineStart(cursorPosition.line + 1);
     return lineText;
   }
 
-  // --------- 6. Blank or comment ---------
+  // ----- 7. Blank or comment -----
   return "";
 }
+
 
 
 
