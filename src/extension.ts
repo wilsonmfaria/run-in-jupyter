@@ -17,18 +17,27 @@ export function activate(context: vscode.ExtensionContext) {
   // The command has been defined in the package.json file
   // Now provide the implementation of the command with registerCommand
   // The commandId parameter must match the command field in package.json
-  let disposable = vscode.commands.registerCommand(
+  let disposable0 = vscode.commands.registerCommand(
     "run-in-jupyter.runAndMoveDown",
     async () => {
       const block  = await getPythonBlockAtCursorWithLines();
       if (!block) return;
       const { code, endLine } = block;
       sendToJupyter(code);
-      moveToLineAfterBlock(endLine);
+      moveToNextCodeLine(vscode.window.activeTextEditor!.document, endLine + 1);
     }
   );
 
-  context.subscriptions.push(disposable);
+  let disposable1 = vscode.commands.registerCommand(
+    "run-in-jupyter.justRun",
+    async () => {
+      const code  = await getPythonBlockAtCursor();
+      if (!code) return;
+      sendToJupyter(code);
+    }
+  );
+
+  context.subscriptions.push(disposable0,disposable1);
 }
 
 // This method is called when your extension is deactivated
@@ -245,23 +254,27 @@ export async function getPythonBlockAtCursorWithLines(): Promise<{ code: string,
 }
 
 // Move cursor to line after the block
-function moveToLineAfterBlock(endLine: number) {
+function moveToNextCodeLine(document: vscode.TextDocument, fromLine: number) {
+  const nextLine = findNextNonEmptyCodeLine(document, fromLine);
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
-  const document = editor.document;
-  let nextLine = endLine + 1;
-  // Clamp to end of document
-  if (nextLine >= document.lineCount) {
-    nextLine = document.lineCount - 1;
-    // Optionally: insert a blank line if at EOF
-    editor.edit(editBuilder => {
-      const lastLine = document.lineAt(document.lineCount - 1);
-      editBuilder.insert(lastLine.range.end, "\n");
-    });
-  }
   const pos = new vscode.Position(nextLine, 0);
   editor.selection = new vscode.Selection(pos, pos);
   editor.revealRange(new vscode.Range(pos, pos));
+}
+
+function findNextNonEmptyCodeLine(document: vscode.TextDocument, fromLine: number): number {
+  let line = fromLine;
+  while (line < document.lineCount) {
+    const text = document.lineAt(line).text;
+    // Skip blank or pure-comment lines
+    if (text.trim() && !/^\s*#/.test(text)) {
+      return line;
+    }
+    line++;
+  }
+  // If not found, return the last line
+  return document.lineCount - 1;
 }
 
 function sendToJupyter(code: string) {
