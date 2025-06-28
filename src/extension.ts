@@ -20,23 +20,50 @@ export function activate(context: vscode.ExtensionContext) {
   let disposable0 = vscode.commands.registerCommand(
     "run-in-jupyter.runAndMoveDown",
     async () => {
-      const block  = await getPythonBlockAtCursorWithLines();
-      if (!block) return;
-      const { code, endLine } = block;
-      sendToJupyter(code);
-      moveToNextCodeLine(vscode.window.activeTextEditor!.document, endLine + 1);
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      const selection = editor.selection;
+      if (!selection.isEmpty) {
+        // Run selected code only
+        const code = editor.document.getText(selection);
+        if (code.trim().length) {
+          sendToJupyter(code);
+          // Optionally, move cursor to next code line after selection
+          moveToNextCodeLine(editor.document, selection.end.line + 1);
+        }
+      } else {
+        // Run inferred block
+        const block = await getPythonBlockAtCursorWithLines();
+        if (!block) return;
+        const { code, endLine } = block;
+        sendToJupyter(code);
+        moveToNextCodeLine(editor.document, endLine + 1);
+      }
     }
   );
 
   let disposable1 = vscode.commands.registerCommand(
-    "run-in-jupyter.justRun",
+    "run-in-jupyter.runAndMoveDown",
     async () => {
-      const code  = await getPythonBlockAtCursor();
-      if (!code) return;
-      sendToJupyter(code);
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      const selection = editor.selection;
+      if (!selection.isEmpty) {
+        // Run selected code only
+        const code = editor.document.getText(selection);
+        if (code.trim().length) {
+          sendToJupyter(code);
+          // Optionally, move cursor to next code line after selection
+          moveToNextCodeLine(editor.document, selection.end.line + 1);
+        }
+      } else {
+        // Run inferred block
+        const code  = await getPythonBlockAtCursor();
+        if (!code) return;
+        sendToJupyter(code);
+      }
     }
   );
-
   context.subscriptions.push(disposable0,disposable1);
 }
 
