@@ -1,12 +1,12 @@
 {
-  "name": "run-in-jupyter",
-  "displayName": "Run in Jupyter",
-  "description": "Execute selected code snippets or inferred code block from a Python file within a Jupyter environment.",
-  "version": "0.1.2",
-  "publisher": "xororz",
+  "name": "python-codesitter",
+  "displayName": "Python Block Runner",
+  "description": "Execute selected code snippets or inferred code block from a Python file within a Jupyter environment. Similar to RStudio behavior.",
+  "version": "0.1.0",
+  "publisher": "wilsonmfaria",
   "repository": {
     "type": "git",
-    "url": "https://github.com/xororz/run-in-jupyter.git"
+    "url": "https://github.com/wilsonmfaria/run-in-jupyter"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -21,23 +21,23 @@
   "contributes": {
     "commands": [
       {
-        "command": "run-in-jupyter.runAndMoveDown",
+        "command": "python-codesitter.runAndMoveDown",
         "title": "Run Current Block and Move Down"
       },
       {
-        "command": "run-in-jupyter.justRun",
+        "command": "python-codesitter.justRun",
         "title": "Just Run Current Block"
       }
     ],
     "keybindings": [
       {
-        "command": "run-in-jupyter.runAndMoveDown",
+        "command": "python-codesitter.runAndMoveDown",
         "key": "shift+enter",
         "mac": "shift+enter",
         "when": "editorTextFocus && editorLangId == 'python'"
       },
       {
-        "command": "run-in-jupyter.justRun",
+        "command": "python-codesitter.justRun",
         "key": "alt+q",
         "mac": "alt+q",
         "when": "editorTextFocus && editorLangId == 'python'"
